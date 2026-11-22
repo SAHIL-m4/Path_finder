@@ -1,2 +1,2 @@
 # Path_finder
-The file “teamname-track03-pathfinder-repo.zip.download” doesn’t appear to be a valid download file
+ Path Finder: Trajectory Estimation Under Sensor Degradation (Hackathon Challenge 2026, Track 03)
