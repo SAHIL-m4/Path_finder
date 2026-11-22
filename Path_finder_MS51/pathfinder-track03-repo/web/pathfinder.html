@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Path Finder: IMU dead-reckoning in your browser</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;600&family=Instrument+Serif&display=swap">
+<style>
+:root{--paper:#eef2ee;--panel:#f9fbf9;--ink:#14213d;--mute:#56645f;--grid:#cfd9d2;--est:#0b7a75;--blind:#c2185b;--gt:#8b9893;--line:#c3cfc7;color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#0f1819;--panel:#162224;--ink:#dce7e2;--mute:#8fa19b;--grid:#223130;--est:#3ad0c4;--blind:#ff6b9a;--gt:#6a7a76;--line:#2b3c3b;color-scheme:dark}}
+:root[data-theme="dark"]{--paper:#0f1819;--panel:#162224;--ink:#dce7e2;--mute:#8fa19b;--grid:#223130;--est:#3ad0c4;--blind:#ff6b9a;--gt:#6a7a76;--line:#2b3c3b;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:400 16px/1.5 "Instrument Sans",system-ui,sans-serif}
+main{max-width:1120px;margin:0 auto;padding:28px 20px 48px}
+h1{font:400 clamp(2rem,5vw,3.2rem)/1.05 "Instrument Serif",Georgia,serif;margin:0 0 8px;letter-spacing:-.01em}
+.lede{max-width:62ch;color:var(--mute);margin:0 0 24px}
+.grid{display:grid;grid-template-columns:300px 1fr;gap:20px;align-items:start}
+@media(max-width:820px){.grid{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+.panel h2{font:600 1rem/1.2 "Instrument Sans",sans-serif;margin:0 0 10px}
+.btn{display:block;width:100%;padding:11px 14px;margin:0 0 8px;border:1px solid var(--ink);border-radius:8px;background:var(--ink);color:var(--paper);font:600 .95rem "Instrument Sans",sans-serif;text-align:center;cursor:pointer}
+.btn.alt{background:transparent;color:var(--ink)}
+.btn:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid var(--est);outline-offset:2px}
+label.f{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:12px 0 0;font-size:.92rem}
+input[type=number],select{width:90px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink);font:inherit}
+select{width:130px}
+input[type=file]{position:absolute;opacity:0;width:1px;height:1px}
+#msg{min-height:1.4em;margin:10px 0 0;font-size:.9rem;color:var(--mute)}
+#msg.err{color:var(--blind)}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:0;margin:14px 0 0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.stats div{padding:9px 11px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}
+.stats div:nth-child(2n){border-right:0}.stats div:nth-last-child(-n+2){border-bottom:0}
+.stats b{display:block;font:400 1.35rem/1.1 "Instrument Serif",Georgia,serif}
+.stats span{font-size:.78rem;color:var(--mute)}
+.plotwrap{padding:10px}
+canvas{display:block;width:100%;height:min(62vw,520px);min-height:300px;border-radius:6px;background:var(--paper)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;padding:10px 6px 2px;font-size:.85rem;color:var(--mute)}
+.legend i{display:inline-block;width:22px;height:0;border-top:3px solid;vertical-align:middle;margin-right:6px}
+.out{margin-top:20px}
+textarea{width:100%;height:150px;resize:vertical;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font:12px/1.45 ui-monospace,Menlo,Consolas,monospace;padding:10px}
+.out .row{display:flex;gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap}
+.out .btn{width:auto;margin:0}
+small{color:var(--mute)}
+</style>
+</head>
+<body>
+<main>
+<h1>Path Finder</h1>
+<p class="lede">Load a degraded EuRoC <code>imu0/data.csv</code> and this page runs the same pipeline as <code>main.py</code> in your browser: gravity alignment, attitude, double integration with zero-velocity updates, dropout bridging, then 5 seconds of dead-reckoning after the IMU dies. Nothing is uploaded; it all runs locally.</p>
+<div class="grid">
+ <section class="panel" aria-label="Controls">
+  <h2>Input</h2>
+  <label class="btn" for="file" tabindex="0" id="pick">Choose imu0/data.csv</label>
+  <input type="file" id="file" accept=".csv,text/csv,text/plain">
+  <button class="btn alt" id="demo" type="button">Run a demo flight</button>
+  <label class="f">Blind seconds <input type="number" id="blind" value="5" min="0" max="30" step="0.5"></label>
+  <label class="f">View <select id="view"><option value="xy">Top (x, y)</option><option value="xz">Side (x, z)</option></select></label>
+  <p id="msg" role="status" aria-live="polite">Choose a file or run the demo.</p>
+  <div class="stats" id="stats" hidden>
+   <div><b id="s_in">0</b><span>IMU rows read</span></div>
+   <div><b id="s_bl">0</b><span>blind poses added</span></div>
+   <div><b id="s_gap">0</b><span>dropouts bridged</span></div>
+   <div><b id="s_us">0</b><span>µs per sample</span></div>
+   <div><b id="s_ate">–</b><span id="s_ate_l">blind-window error</span></div>
+   <div><b id="s_ms">0</b><span>total ms</span></div>
+  </div>
+ </section>
+ <section class="panel plotwrap" aria-label="Trajectory plot">
+  <canvas id="cv" role="img" aria-label="Estimated trajectory"></canvas>
+  <div class="legend"><span><i style="border-color:var(--est)"></i>estimated, IMU alive</span><span><i style="border-color:var(--blind);border-top-style:dashed"></i>blind dead-reckoning</span><span id="lg_gt" hidden><i style="border-color:var(--gt)"></i>demo ground truth</span></div>
+ </section>
+</div>
+<section class="panel out" aria-label="Output">
+ <div class="row"><h2 style="margin:0">estimated_trajectory.txt</h2><button class="btn alt" id="copy" type="button" disabled>Copy full file</button><small id="osz"></small></div>
+ <textarea id="txt" readonly spellcheck="false" placeholder="TUM format: timestamp tx ty tz qx qy qz qw"></textarea>
+ <small>Browsers block file saving on hosted pages, so copy the text into a file, or use <code>main.py</code> for the submission file itself.</small>
+</section>
+</main>
+<script>
+"use strict";
+const P={G:9.80665,ALIGN:0.5,WMAX:35,AMAX:160,GAPF:2.5,KP:4,KI:0.05,BCL:0.08,ZW2:0.0016,ZDEV:0.1,ZDA2:0.04,ZAW2:0.0225,ZHOLD:0.3,BRW2:0.000144,BRHOLD:1,TVG:4,TWG:2,TVB:8,TWB:2,BVW:1,BLEND:0.5,OTAU:0.3,LMAX:0.2,LFLOOR:1/60,LREF:0.25,AR:0.15,AV:0.0025};
+const $=id=>document.getElementById(id);
+function parseCSV(text){
+  const rows=[];let t0=null;
+  for(const raw of text.split("\n")){
+    const line=raw.trim();if(!line||line[0]==="#")continue;
+    const p=line.split(",");let tb;
+    try{tb=BigInt(p[0].trim())}catch(e){const f=parseFloat(p[0]);if(!isFinite(f))continue;tb=BigInt(Math.round(f))}
+    if(t0===null)t0=tb;
+    let s=null;
+    if(p.length>=7){const v=[];for(let i=1;i<7;i++)v.push(parseFloat(p[i]));
+      if(Math.abs(v[0])<P.WMAX&&Math.abs(v[1])<P.WMAX&&Math.abs(v[2])<P.WMAX&&Math.abs(v[3])<P.AMAX&&Math.abs(v[4])<P.AMAX&&Math.abs(v[5])<P.AMAX)s=v}
+    rows.push({t:Number(tb-t0),s});
+  }
+  return{rows,t0};
+}
+function rotq(q,rx,ry,rz){
+  const th2=rx*rx+ry*ry+rz*rz;let dw,s;
+  if(th2<1e-12){dw=1-th2*0.125;s=0.5-th2/48}else{const th=Math.sqrt(th2);dw=Math.cos(th/2);s=Math.sin(th/2)/th}
+  const dx=rx*s,dy=ry*s,dz=rz*s,[w,x,y,z]=q;
+  const nw=w*dw-x*dx-y*dy-z*dz,nx=w*dx+x*dw+y*dz-z*dy,ny=w*dy-x*dz+y*dw+z*dx,nz=w*dz+x*dy-y*dx+z*dw;
+  const n=1/Math.sqrt(nw*nw+nx*nx+ny*ny+nz*nz);return[nw*n,nx*n,ny*n,nz*n];
+}
+function pipeline(rows,blindS){
+  let n=0,sw=[0,0,0],sa=[0,0,0],sw2=0,first=null,k=0;
+  for(;k<rows.length;k++){const s=rows[k].s;if(!s)continue;if(first===null)first=rows[k].t;
+    n++;for(let i=0;i<3;i++){sw[i]+=s[i];sa[i]+=s[i+3];sw2+=s[i]*s[i]}
+    if((rows[k].t-first)*1e-9>=P.ALIGN||k>5000)break}
+  if(!n)throw new Error("No valid IMU rows found. Expected: #timestamp [ns], wx, wy, wz, ax, ay, az");
+  let bg0=sw.map(v=>v/n);const m=sa.map(v=>v/n);
+  const m2=bg0[0]**2+bg0[1]**2+bg0[2]**2;
+  if(m2>P.AR**2||(sw2/n-m2)>P.AV)bg0=[0,0,0];
+  let g=Math.hypot(...m);if(!(g>9&&g<10.6))g=P.G;
+  const roll=Math.atan2(m[1],m[2]),pitch=Math.atan2(-m[0],Math.hypot(m[1],m[2]));
+  const cr=Math.cos(roll/2),sr=Math.sin(roll/2),cp=Math.cos(pitch/2),sp=Math.sin(pitch/2);
+  let q=[cr*cp,sr*cp,cr*sp,-sr*sp];
+  const d=[];for(let i=1;i<Math.min(rows.length,400);i++){const x=rows[i].t-rows[i-1].t;if(x>0)d.push(x)}
+  d.sort((a,b)=>a-b);const nomNs=d.length?d[d.length>>1]:5e6,nom=nomNs*1e-9,gapThr=P.GAPF*nom;
+  let p=[0,0,0],v=[0,0,0],bg=bg0.slice(),om=[0,0,0],devE=0,w2E=0,da2E=0,aw2E=0,pa=null,stat=0,gaps=0;
+  const sNeed=Math.max(3,Math.floor(P.ZHOLD/nom)),rNeed=Math.max(10,Math.floor(P.BRHOLD/nom));
+  let prev=null,last=null;const out=[],hist=[];let hh=0;
+  const coast=c=>{if(c<=0)return;const kw=P.TWG*(1-Math.exp(-c/P.TWG));q=rotq(q,om[0]*kw,om[1]*kw,om[2]*kw);
+    const kv=P.TVG*(1-Math.exp(-c/P.TVG));for(let i=0;i<3;i++){p[i]+=v[i]*kv;v[i]*=Math.exp(-c/P.TVG)}};
+  for(const r of rows){
+    if(prev===null){prev=last=r.t;hist.push([0,0,0,0]);out.push([r.t,0,0,0,...q]);continue}
+    let dtn=r.t-prev;if(dtn<=0)continue;let dt=dtn*1e-9;prev=last=r.t;
+    const s=r.s;
+    if(!s){coast(dt);gaps++;stat=0;pa=null}
+    else{
+      if(dt>gapThr){coast(dt-nom);gaps++;dt=nom;stat=0;pa=null}
+      const a=[s[3],s[4],s[5]];let w=[s[0]-bg[0],s[1]-bg[1],s[2]-bg[2]];
+      const an=Math.hypot(a[0],a[1],a[2]),dev=Math.abs(an-g);
+      devE+=0.02*(dev-devE);w2E+=0.05*(w[0]*w[0]+w[1]*w[1]+w[2]*w[2]-w2E);
+      if(pa)da2E+=0.05*((a[0]-pa[0])**2+(a[1]-pa[1])**2+(a[2]-pa[2])**2-da2E);
+      pa=a;
+      if(an>1e-3&&dev<0.5+2*devE){
+        const iv=1/an,an_=[a[0]*iv,a[1]*iv,a[2]*iv],[qw,qx,qy,qz]=q;
+        const vv=[2*(qx*qz-qw*qy),2*(qy*qz+qw*qx),1-2*(qx*qx+qy*qy)];
+        const e=[an_[1]*vv[2]-an_[2]*vv[1],an_[2]*vv[0]-an_[0]*vv[2],an_[0]*vv[1]-an_[1]*vv[0]];
+        const rr=devE*2,kp=P.KP/(1+rr*rr),ki=P.KI*dt/(1+rr*rr);
+        for(let i=0;i<3;i++){w[i]+=kp*e[i];bg[i]-=ki*e[i];bg[i]=Math.min(bg0[i]+P.BCL,Math.max(bg0[i]-P.BCL,bg[i]))}
+      }
+      const al=Math.min(1,dt/P.OTAU);for(let i=0;i<3;i++)om[i]+=al*(w[i]-om[i]);
+      q=rotq(q,w[0]*dt,w[1]*dt,w[2]*dt);
+      const [qw,qx,qy,qz]=q,xx=qx*qx,yy=qy*qy,zz=qz*qz,xy=qx*qy,xz=qx*qz,yz=qy*qz,wx=qw*qx,wy=qw*qy,wz=qw*qz;
+      const aw=[(1-2*(yy+zz))*a[0]+2*(xy-wz)*a[1]+2*(xz+wy)*a[2],2*(xy+wz)*a[0]+(1-2*(xx+zz))*a[1]+2*(yz-wx)*a[2],2*(xz-wy)*a[0]+2*(yz+wx)*a[1]+(1-2*(xx+yy))*a[2]-g];
+      const h2=0.5*dt*dt;for(let i=0;i<3;i++){p[i]+=v[i]*dt+aw[i]*h2;v[i]+=aw[i]*dt}
+      const sig=Math.sqrt(0.5*da2E)/P.LREF,lk=1-dt*(P.LFLOOR+P.LMAX*(sig<1.5?sig*sig:2.25));
+      for(let i=0;i<3;i++)v[i]*=lk;
+      aw2E+=0.05*(aw[0]*aw[0]+aw[1]*aw[1]+aw[2]*aw[2]-aw2E);
+      if(w2E<P.ZW2&&devE<P.ZDEV&&da2E<P.ZDA2&&aw2E<P.ZAW2){
+        if(++stat>=sNeed){v=[0,0,0];
+          if(stat>=rNeed&&w2E<P.BRW2)for(let i=0;i<3;i++){bg[i]+=0.01*(s[i]-bg[i]);if(Math.abs(bg[i]-bg0[i])>2*P.BCL)bg[i]=bg0[i]}}
+      }else stat=0;
+    }
+    const ts=r.t*1e-9;hist.push([ts,p[0],p[1],p[2]]);
+    while(hist[hh][0]<ts-P.BVW)hh++;
+    out.push([r.t,p[0],p[1],p[2],...q]);
+  }
+  let nb=0;
+  if(blindS>0&&last!==null){
+    const H=hist.slice(hh),N=H.length;let bv=v.slice();
+    if(N>=10&&H[N-1][0]-H[0][0]>0.2){
+      const tm=H.reduce((a,x)=>a+x[0],0)/N,mp=[1,2,3].map(j=>H.reduce((a,x)=>a+x[j],0)/N);
+      let sxx=0;const sxp=[0,0,0];
+      for(const x of H){const dd=x[0]-tm;sxx+=dd*dd;for(let j=0;j<3;j++)sxp[j]+=dd*(x[j+1]-mp[j])}
+      if(sxx>1e-9)bv=bv.map((c,j)=>P.BLEND*(sxp[j]/sxx)+(1-P.BLEND)*c);
+    }
+    v=bv;const wd=Math.exp(-nom/P.TWB),vd=Math.exp(-nom/P.TVB);nb=Math.round(blindS/nom);
+    for(let j=1;j<=nb;j++){for(let i=0;i<3;i++){om[i]*=wd;v[i]*=vd;p[i]+=v[i]*nom}
+      q=rotq(q,om[0]*nom,om[1]*nom,om[2]*nom);out.push([last+j*nomNs,p[0],p[1],p[2],...q])}
+  }
+  return{out,nb,gaps};
+}
+function toText(out,t0){
+  const L=["# timestamp tx ty tz qx qy qz qw"];
+  for(const r of out){let [t,x,y,z,qw,qx,qy,qz]=r;if(qw<0){qw=-qw;qx=-qx;qy=-qy;qz=-qz}
+    const T=t0+BigInt(Math.round(t));
+    L.push(`${T/1000000000n}.${String(T%1000000000n).padStart(9,"0")} ${x.toFixed(7)} ${y.toFixed(7)} ${z.toFixed(7)} ${qx.toFixed(8)} ${qy.toFixed(8)} ${qz.toFixed(8)} ${qw.toFixed(8)}`)}
+  return L.join("\n")+"\n";
+}
+function demo(){
+  const HZ=200,TF=36,DR=[20,22],g=P.G;let sd=7;
+  const rnd=()=>{sd=(Math.imul(sd,1664525)+1013904223)>>>0;return sd/4294967296};
+  const gs=()=>Math.sqrt(-2*Math.log(rnd()+1e-12))*Math.cos(2*Math.PI*rnd());
+  const env=t=>{const u=Math.min(1,Math.max(0,(t-1)/3));return u*u*(3-2*u)};
+  const pos=t=>{const e=env(t);return[4*e*Math.sin(.31*t),3*e*Math.sin(.23*t+.7),1.5+.6*e*Math.sin(.41*t+1.1)]};
+  const rot=t=>{const e=env(t),r=.15*e*Math.sin(.5*t),p=.1*e*Math.sin(.35*t+1),y=.8*e*Math.sin(.1*t);
+    const cr=Math.cos(r),sr=Math.sin(r),cp=Math.cos(p),sp=Math.sin(p),cy=Math.cos(y),sy=Math.sin(y);
+    return[[cy*cp,cy*sp*sr-sy*cr,cy*sp*cr+sy*sr],[sy*cp,sy*sp*sr+cy*cr,sy*sp*cr-cy*sr],[-sp,cp*sr,cp*cr]]};
+  const gt=[],lines=["#timestamp [ns],w_RS_S_x [rad s^-1],w_RS_S_y [rad s^-1],w_RS_S_z [rad s^-1],a_RS_S_x [m s^-2],a_RS_S_y [m s^-2],a_RS_S_z [m s^-2]"];
+  const h=1e-3,T0=1403636579758555392n,bg0=[-.0022,.0208,.0757],ba0=[-.0236,.121,.0781];
+  for(let i=0;i<(TF+5)*HZ;i++){
+    const t=i/HZ,A=pos(t),B=pos(t+h),C=pos(t-h);gt.push(A);
+    if(t>=TF||(t>=DR[0]&&t<DR[1]))continue;
+    const R=rot(t),Rp=rot(t+h),Rm=rot(t-h),acc=[0,1,2].map(j=>(B[j]-2*A[j]+C[j])/(h*h));acc[2]+=g;
+    const W=[[0,0,0],[0,0,0],[0,0,0]];
+    for(let a=0;a<3;a++)for(let b=0;b<3;b++){let s=0;for(let k=0;k<3;k++)s+=R[k][a]*(Rp[k][b]-Rm[k][b])/(2*h);W[a][b]=s}
+    const ramp=Math.min(1,Math.max(0,(t-5)/(TF-5))),sg=.003+.02*ramp,sa=.025+.3*ramp;
+    const gy=[W[2][1]+bg0[0]+ramp*.01+sg*gs(),W[0][2]+bg0[1]-ramp*.008+sg*gs(),W[1][0]+bg0[2]+ramp*.012+sg*gs()];
+    const ex=[.08,-.06,.05],sp=[0,1,2].map(b=>R[0][b]*acc[0]+R[1][b]*acc[1]+R[2][b]*acc[2]);
+    const ac=sp.map((c,j)=>c+ba0[j]+ramp*ex[j]+sa*gs());
+    lines.push(`${T0+BigInt(i*5000000)},${gy.map(x=>x.toFixed(9)).join(",")},${ac.map(x=>x.toFixed(9)).join(",")}`);
+  }
+  const p0=gt[0];return{csv:lines.join("\n"),gt:gt.map(p=>[p[0]-p0[0],p[1]-p0[1],p[2]-p0[2]]),HZ};
+}
+let state=null;
+const cv=$("cv"),ctx=cv.getContext("2d");
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function draw(){
+  if(!state)return;
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth,H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
+  const ax=$("view").value==="xy"?[1,2]:[1,3],pts=state.out,nIn=pts.length-state.nb;
+  const gtp=state.gt?state.gt.slice(0,pts.length):null;
+  let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+  const grow=(a,b)=>{x0=Math.min(x0,a);x1=Math.max(x1,a);y0=Math.min(y0,b);y1=Math.max(y1,b)};
+  for(const r of pts)grow(r[ax[0]],r[ax[1]]);
+  if(gtp)for(const r of gtp)grow(r[ax[0]-1],r[ax[1]-1]);
+  const pad=36,sc=Math.min((W-2*pad)/Math.max(x1-x0,1e-6),(H-2*pad)/Math.max(y1-y0,1e-6));
+  const ox=(W-sc*(x1-x0))/2-sc*x0,oy=(H+sc*(y1-y0))/2+sc*y0;
+  const X=v=>ox+sc*v,Y=v=>oy-sc*v;
+  ctx.font="11px Instrument Sans,system-ui,sans-serif";ctx.fillStyle=css("--mute");ctx.strokeStyle=css("--grid");ctx.lineWidth=1;
+  const raw=40/sc,pw=Math.pow(10,Math.floor(Math.log10(raw))),st=[1,2,5,10].map(m=>m*pw).find(s=>s>=raw)||pw*10;
+  for(let v=Math.ceil((-ox/sc)/st)*st;X(v)<W;v+=st){ctx.beginPath();ctx.moveTo(X(v),0);ctx.lineTo(X(v),H);ctx.stroke();ctx.fillText(+v.toFixed(3)+"",X(v)+3,H-4)}
+  for(let v=Math.ceil(((oy-H)/sc)/st)*st;Y(v)>0;v+=st){ctx.beginPath();ctx.moveTo(0,Y(v));ctx.lineTo(W,Y(v));ctx.stroke();ctx.fillText(+v.toFixed(3)+" m",4,Y(v)-3)}
+  const line=(arr,a,b,from,to,col,dash,wd)=>{ctx.beginPath();ctx.setLineDash(dash);ctx.strokeStyle=col;ctx.lineWidth=wd;
+    for(let i=from;i<to;i++){const r=arr[i];i===from?ctx.moveTo(X(r[a]),Y(r[b])):ctx.lineTo(X(r[a]),Y(r[b]))}ctx.stroke();ctx.setLineDash([])};
+  if(gtp)line(gtp,ax[0]-1,ax[1]-1,0,gtp.length,css("--gt"),[2,4],1.5);
+  line(pts,ax[0],ax[1],0,nIn,css("--est"),[],2.4);
+  if(state.nb)line(pts,ax[0],ax[1],nIn-1,pts.length,css("--blind"),[7,5],2.4);
+  const dot=(r,col,lab)=>{ctx.fillStyle=col;ctx.beginPath();ctx.arc(X(r[ax[0]]),Y(r[ax[1]]),4.5,0,7);ctx.fill();ctx.fillStyle=css("--ink");ctx.fillText(lab,X(r[ax[0]])+8,Y(r[ax[1]])-6)};
+  dot(pts[0],css("--est"),"start");
+  if(state.nb){dot(pts[nIn-1],css("--ink"),"IMU fails");dot(pts[pts.length-1],css("--blind"),"strike point")}
+}
+function run(text,label){
+  const msg=$("msg");msg.className="";
+  try{
+    const t0p=performance.now(),{rows,t0}=parseCSV(text);
+    const bl=Math.max(0,Math.min(30,parseFloat($("blind").value)||0));
+    const res=pipeline(rows,bl),ms=performance.now()-t0p;
+    state={out:res.out,nb:res.nb,t0,gt:null};
+    const nIn=res.out.length-res.nb;
+    $("stats").hidden=false;$("s_in").textContent=rows.length.toLocaleString();$("s_bl").textContent=res.nb.toLocaleString();
+    $("s_gap").textContent=res.gaps;$("s_us").textContent=(ms*1000/Math.max(rows.length,1)).toFixed(1);$("s_ms").textContent=ms.toFixed(0);
+    $("s_ate").textContent="–";$("lg_gt").hidden=true;
+    const full=toText(res.out,t0);window._full=full;
+    const ls=full.split("\n");$("txt").value=ls.length>60?ls.slice(0,30).join("\n")+"\n… "+(ls.length-40)+" more rows …\n"+ls.slice(-10).join("\n"):full;
+    $("copy").disabled=false;$("osz").textContent=(res.out.length).toLocaleString()+" poses, "+(full.length/1024).toFixed(0)+" KB";
+    msg.textContent=label+": "+nIn.toLocaleString()+" poses plus "+res.nb+" blind.";
+    draw();return res;
+  }catch(e){msg.className="err";msg.textContent=e.message}
+}
+$("file").addEventListener("change",e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();
+  r.onload=()=>{run(r.result,f.name);window._last=r.result};r.onerror=()=>{$("msg").className="err";$("msg").textContent="Could not read that file."};r.readAsText(f)});
+$("pick").addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();$("file").click()}});
+$("demo").addEventListener("click",()=>{
+  $("msg").textContent="Building a synthetic degraded flight…";
+  setTimeout(()=>{const d=demo(),res=run(d.csv,"Demo flight");if(!res)return;window._last=d.csv;
+    state.gt=d.gt;$("lg_gt").hidden=false;
+    const nIn=res.out.length-res.nb;let s=0,c=0;
+    for(let i=nIn;i<res.out.length;i++){const r=res.out[i],gp=d.gt[Math.round(r[0]*1e-9*d.HZ)];if(!gp)continue;s+=(r[1]-gp[0])**2+(r[2]-gp[1])**2+(r[3]-gp[2])**2;c++}
+    $("s_ate").textContent=c?Math.sqrt(s/c).toFixed(1)+" m":"–";$("s_ate_l").textContent="blind-window error vs truth";draw()},30)});
+$("blind").addEventListener("change",()=>{if(window._last)run(window._last,"Re-run")});
+$("view").addEventListener("change",draw);
+$("copy").addEventListener("click",async()=>{
+  const b=$("copy");try{await navigator.clipboard.writeText(window._full);b.textContent="Copied"}
+  catch(e){const t=document.createElement("textarea");t.value=window._full;document.body.appendChild(t);t.select();
+    try{document.execCommand("copy");b.textContent="Copied"}catch(_){b.textContent="Copy failed"}t.remove()}
+  setTimeout(()=>b.textContent="Copy full file",1800)});
+window.addEventListener("resize",draw);
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",draw);
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "input_rows": 7600,
+  "blind_rows": 1000,
+  "wall_seconds": 0.0470,
+  "cpu_seconds": 0.0470,
+  "us_per_imu_sample": 6.18,
+  "peak_rss_kb_incl_interpreter": 12016,
+  "python": "3.12.3",
+  "threads": 1
+}
